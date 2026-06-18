@@ -12,6 +12,8 @@ const NAV = [
   { label: 'Scheduling', section: true },
   { to: '/workload', label: 'Live Workload' },
   { to: '/schedule', label: 'Generate Scheme' },
+  { label: 'On Exam Day', section: true },
+  { to: '/absences', label: 'Absences & Replacements' },
   { label: 'Admin', section: true },
   { to: '/users', label: 'Manage Users' },
   { to: '/settings', label: 'Settings' },
