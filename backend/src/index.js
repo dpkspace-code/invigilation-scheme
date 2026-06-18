@@ -19,6 +19,7 @@ app.use('/api/pairs', require('./routes/crud')('pairs'));
 app.use('/api/venues', require('./routes/crud')('venues'));
 app.use('/api/exams', require('./routes/crud')('exams'));
 app.use('/api/schedule', require('./routes/schedule'));
+app.use('/api/absences', require('./routes/absences'));
 
 app.use((err, req, res, next) => {
   console.error(err);
