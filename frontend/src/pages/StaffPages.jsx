@@ -1,8 +1,10 @@
 // Attendants.jsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { attendants as api } from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+
+const UNDO_WINDOW_MS = 6000;
 
 export function Attendants() {
   const [list, setList] = useState([]);
@@ -10,6 +12,7 @@ export function Attendants() {
   const [unavail, setUnavail] = useState('');
   const [selected, setSelected] = useState(new Set());
   const { isAdmin } = useAuth();
+  const pendingDeletes = useRef(new Map());
   const load = () => api.list().then(r => setList(r.data)).catch(() => {});
   useEffect(() => { load(); }, []);
 
@@ -21,29 +24,53 @@ export function Attendants() {
   };
   const update = async (id, field, value) => { try { await api.update(id, { [field]: value }); } catch { toast.error('Failed'); } };
 
-  const remove = async (id) => {
+  const commitDelete = (id) => {
+    const entry = pendingDeletes.current.get(id);
+    if (!entry) return;
+    api.remove(id).catch(() => { toast.error('Failed to remove on server'); load(); });
+    pendingDeletes.current.delete(id);
+  };
+  const undoDelete = (id) => {
+    const entry = pendingDeletes.current.get(id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    pendingDeletes.current.delete(id);
+    setList(prev => prev.some(a => a.id === id) ? prev : [...prev, entry.record].sort((a,b)=>(a.sort_order??0)-(b.sort_order??0)));
+  };
+
+  const remove = (id) => {
+    const record = list.find(a => a.id === id);
+    if (!record) return;
     if (!confirm('Remove?')) return;
     setList(prev => prev.filter(a => a.id !== id));
     setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
-    try { await api.remove(id); toast.success('Removed'); }
-    catch { toast.error('Failed — restoring'); load(); }
+    const timer = setTimeout(() => commitDelete(id), UNDO_WINDOW_MS);
+    pendingDeletes.current.set(id, { record, timer });
+    toast((t) => (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        Removed "{record.name}"
+        <button className="btn btn-sm" onClick={() => { undoDelete(id); toast.dismiss(t.id); }}>Undo</button>
+      </span>
+    ), { duration: UNDO_WINDOW_MS });
   };
 
-  const toggleSelect = (id) => {
-    setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  };
-  const toggleSelectAll = () => {
-    if (selected.size === list.length) setSelected(new Set());
-    else setSelected(new Set(list.map(a => a.id)));
-  };
-  const removeSelected = async () => {
+  const toggleSelect = (id) => { setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); };
+  const toggleSelectAll = () => { if (selected.size === list.length) setSelected(new Set()); else setSelected(new Set(list.map(a => a.id))); };
+  const removeSelected = () => {
     if (!selected.size) return;
-    if (!confirm(`Remove ${selected.size} selected attendant(s)?`)) return;
     const ids = [...selected];
+    if (!confirm(`Remove ${ids.length} selected attendant(s)?`)) return;
+    const records = list.filter(a => selected.has(a.id));
     setList(prev => prev.filter(a => !selected.has(a.id)));
     setSelected(new Set());
-    try { await Promise.all(ids.map(id => api.remove(id))); toast.success(`${ids.length} attendant(s) removed`); }
-    catch { toast.error('Some removals failed — refreshing'); load(); }
+    const timer = setTimeout(() => { ids.forEach(id => { if (pendingDeletes.current.has(id)) commitDelete(id); }); }, UNDO_WINDOW_MS);
+    records.forEach(r => pendingDeletes.current.set(r.id, { record: r, timer }));
+    toast((t) => (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        Removed {ids.length} attendant(s)
+        <button className="btn btn-sm" onClick={() => { ids.forEach(undoDelete); toast.dismiss(t.id); }}>Undo</button>
+      </span>
+    ), { duration: UNDO_WINDOW_MS });
   };
 
   return (
@@ -99,6 +126,7 @@ export function Pairs() {
   const [generating, setGenerating] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const { isAdmin } = useAuth();
+  const pendingDeletes = useRef(new Map());
   const load = () => Promise.all([pairsApi.list(), teachersApi.list()]).then(([p, t]) => { setList(p.data); setTeacherNames(t.data.map(x => x.name)); }).catch(() => {});
   useEffect(() => { load(); }, []);
 
@@ -121,29 +149,53 @@ export function Pairs() {
 
   const update = async (id, field, value) => { try { await pairsApi.update(id, { [field]: value }); } catch { toast.error('Failed'); } };
 
-  const remove = async (id) => {
+  const commitDelete = (id) => {
+    const entry = pendingDeletes.current.get(id);
+    if (!entry) return;
+    pairsApi.remove(id).catch(() => { toast.error('Failed to remove on server'); load(); });
+    pendingDeletes.current.delete(id);
+  };
+  const undoDelete = (id) => {
+    const entry = pendingDeletes.current.get(id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    pendingDeletes.current.delete(id);
+    setList(prev => prev.some(p => p.id === id) ? prev : [...prev, entry.record].sort((a,b)=>(a.sort_order??0)-(b.sort_order??0)));
+  };
+
+  const remove = (id) => {
+    const record = list.find(p => p.id === id);
+    if (!record) return;
     if (!confirm('Remove pair?')) return;
     setList(prev => prev.filter(p => p.id !== id));
     setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
-    try { await pairsApi.remove(id); toast.success('Removed'); }
-    catch { toast.error('Failed — restoring'); load(); }
+    const timer = setTimeout(() => commitDelete(id), UNDO_WINDOW_MS);
+    pendingDeletes.current.set(id, { record, timer });
+    toast((t) => (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        Removed pair
+        <button className="btn btn-sm" onClick={() => { undoDelete(id); toast.dismiss(t.id); }}>Undo</button>
+      </span>
+    ), { duration: UNDO_WINDOW_MS });
   };
 
-  const toggleSelect = (id) => {
-    setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  };
-  const toggleSelectAll = () => {
-    if (selected.size === list.length) setSelected(new Set());
-    else setSelected(new Set(list.map(p => p.id)));
-  };
-  const removeSelected = async () => {
+  const toggleSelect = (id) => { setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); };
+  const toggleSelectAll = () => { if (selected.size === list.length) setSelected(new Set()); else setSelected(new Set(list.map(p => p.id))); };
+  const removeSelected = () => {
     if (!selected.size) return;
-    if (!confirm(`Remove ${selected.size} selected pair(s)?`)) return;
     const ids = [...selected];
+    if (!confirm(`Remove ${ids.length} selected pair(s)?`)) return;
+    const records = list.filter(p => selected.has(p.id));
     setList(prev => prev.filter(p => !selected.has(p.id)));
     setSelected(new Set());
-    try { await Promise.all(ids.map(id => pairsApi.remove(id))); toast.success(`${ids.length} pair(s) removed`); }
-    catch { toast.error('Some removals failed — refreshing'); load(); }
+    const timer = setTimeout(() => { ids.forEach(id => { if (pendingDeletes.current.has(id)) commitDelete(id); }); }, UNDO_WINDOW_MS);
+    records.forEach(r => pendingDeletes.current.set(r.id, { record: r, timer }));
+    toast((t) => (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        Removed {ids.length} pair(s)
+        <button className="btn btn-sm" onClick={() => { ids.forEach(undoDelete); toast.dismiss(t.id); }}>Undo</button>
+      </span>
+    ), { duration: UNDO_WINDOW_MS });
   };
 
   const usedA = new Set(list.map(p => p.member_a).filter(Boolean));

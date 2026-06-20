@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { teachers as api } from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+
+const UNDO_WINDOW_MS = 6000;
 
 export default function Teachers() {
   const [list, setList] = useState([]);
@@ -11,6 +13,7 @@ export default function Teachers() {
   const [unavail, setUnavail] = useState('');
   const [selected, setSelected] = useState(new Set());
   const { isAdmin } = useAuth();
+  const pendingDeletes = useRef(new Map());
 
   const load = () => api.list().then(r => setList(r.data)).catch(() => {}).finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
@@ -32,12 +35,43 @@ export default function Teachers() {
     } catch (err) { toast.error('Failed to save'); }
   };
 
-  const remove = async (id) => {
+  const commitDelete = (id) => {
+    const entry = pendingDeletes.current.get(id);
+    if (!entry) return;
+    api.remove(id).catch(() => { toast.error('Failed to remove on server'); load(); });
+    pendingDeletes.current.delete(id);
+  };
+
+  const undoDelete = (id) => {
+    const entry = pendingDeletes.current.get(id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    pendingDeletes.current.delete(id);
+    setList(prev => {
+      if (prev.some(t => t.id === id)) return prev;
+      return [...prev, entry.record].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    });
+  };
+
+  const remove = (id) => {
+    const record = list.find(t => t.id === id);
+    if (!record) return;
     if (!confirm('Remove this teacher?')) return;
+
     setList(prev => prev.filter(t => t.id !== id));
     setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
-    try { await api.remove(id); toast.success('Removed'); }
-    catch (err) { toast.error('Failed to remove — restoring'); load(); }
+
+    const timer = setTimeout(() => commitDelete(id), UNDO_WINDOW_MS);
+    pendingDeletes.current.set(id, { record, timer });
+
+    toast((t) => (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        Removed "{record.name}"
+        <button className="btn btn-sm" onClick={() => { undoDelete(id); toast.dismiss(t.id); }}>
+          Undo
+        </button>
+      </span>
+    ), { duration: UNDO_WINDOW_MS });
   };
 
   const toggleSelect = (id) => {
@@ -53,16 +87,28 @@ export default function Teachers() {
     else setSelected(new Set(list.map(t => t.id)));
   };
 
-  const removeSelected = async () => {
+  const removeSelected = () => {
     if (!selected.size) return;
-    if (!confirm(`Remove ${selected.size} selected teacher(s)?`)) return;
     const ids = [...selected];
+    if (!confirm(`Remove ${ids.length} selected teacher(s)?`)) return;
+
+    const records = list.filter(t => selected.has(t.id));
     setList(prev => prev.filter(t => !selected.has(t.id)));
     setSelected(new Set());
-    try {
-      await Promise.all(ids.map(id => api.remove(id)));
-      toast.success(`${ids.length} teacher(s) removed`);
-    } catch (err) { toast.error('Some removals failed — refreshing'); load(); }
+
+    const timer = setTimeout(() => {
+      ids.forEach(id => { if (pendingDeletes.current.has(id)) commitDelete(id); });
+    }, UNDO_WINDOW_MS);
+    records.forEach(r => pendingDeletes.current.set(r.id, { record: r, timer }));
+
+    toast((t) => (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        Removed {ids.length} teacher(s)
+        <button className="btn btn-sm" onClick={() => { ids.forEach(undoDelete); toast.dismiss(t.id); }}>
+          Undo
+        </button>
+      </span>
+    ), { duration: UNDO_WINDOW_MS });
   };
 
   if (loading) return <div className="help">Loading…</div>;
