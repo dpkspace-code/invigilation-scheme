@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://invigilation-scheme-production.up.railway.app';
+const API_URL = import.meta.env.VITE_API_URL || 'https://invigilation-scheme.onrender.com';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -84,4 +84,17 @@ export const config = {
 export const schedule = {
   generate: () => api.get('/api/schedule/generate'),
   workload: () => api.get('/api/schedule/workload'),
+};
+
+export const absences = {
+  list: (date) => api.get('/api/absences', { params: { date } }),
+  mark: (exam_date, staff_name, staff_type) => api.post('/api/absences', { exam_date, staff_name, staff_type }),
+  remove: (id) => api.delete(`/api/absences/${id}`),
+
+  suggestions: (date, slot, staff_name, staff_type) =>
+    api.get('/api/absences/suggestions', { params: { date, slot, staff_name, staff_type } }),
+
+  listReplacements: (date) => api.get('/api/absences/replacements', { params: { date } }),
+  confirmReplacement: (data) => api.post('/api/absences/replacements', data),
+  removeReplacement: (id) => api.delete(`/api/absences/replacements/${id}`),
 };
