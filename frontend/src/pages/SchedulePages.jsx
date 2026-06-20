@@ -91,21 +91,47 @@ export function Workload() {
   );
 }
 
-// Schedule.jsx — full generated scheme with export, per-row hide + persistent undo
+// Schedule.jsx — full generated scheme with export, per-row hide + persistent undo,
+// now persisted to sessionStorage so navigating away and back keeps the result.
 export function Schedule() {
-  const [result, setResult] = useState(null);
+  const STORAGE_KEY = 'invig_schedule_result_v1';
+  const HIDDEN_KEY = 'invig_schedule_hidden_v1';
+
+  const loadStoredResult = () => {
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  };
+  const loadStoredHidden = () => {
+    try {
+      const raw = sessionStorage.getItem(HIDDEN_KEY);
+      return raw ? new Map(JSON.parse(raw)) : new Map();
+    } catch { return new Map(); }
+  };
+
+  const [result, setResult] = useState(loadStoredResult);
   const [loading, setLoading] = useState(false);
-  const [hidden, setHidden] = useState(new Map());
+  const [hidden, setHidden] = useState(loadStoredHidden);
   const [undoStack, setUndoStack] = useState([]);
 
   const rowKey = (row) => `${row.exam.exam_date}|${row.exam.slot}|${row.exam.venue}`;
+
+  const persistResult = (r) => {
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(r)); } catch {}
+  };
+  const persistHidden = (h) => {
+    try { sessionStorage.setItem(HIDDEN_KEY, JSON.stringify([...h.entries()])); } catch {}
+  };
 
   const generate = async () => {
     setLoading(true);
     try {
       const r = await scheduleApi.generate();
       setResult(r.data);
+      persistResult(r.data);
       setHidden(new Map());
+      persistHidden(new Map());
       setUndoStack([]);
     } catch (err) {
       alert(err.response?.data?.error || 'Generation failed');
@@ -115,7 +141,12 @@ export function Schedule() {
   const hideRow = (row) => {
     const key = rowKey(row);
     if (!confirm(`Remove this slot (${row.exam.exam_date} · ${row.exam.slot} · ${row.exam.venue}) from the displayed/exported scheme?`)) return;
-    setHidden(prev => { const next = new Map(prev); next.set(key, row); return next; });
+    setHidden(prev => {
+      const next = new Map(prev);
+      next.set(key, row);
+      persistHidden(next);
+      return next;
+    });
     const batchId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setUndoStack(prev => [...prev, { batchId, label: `Removed ${row.exam.exam_date} · ${row.exam.slot} · ${row.exam.venue}`, keys: [key] }]);
   };
@@ -123,7 +154,12 @@ export function Schedule() {
   const undoBatch = (batchId) => {
     const batch = undoStack.find(b => b.batchId === batchId);
     if (!batch) return;
-    setHidden(prev => { const next = new Map(prev); batch.keys.forEach(k => next.delete(k)); return next; });
+    setHidden(prev => {
+      const next = new Map(prev);
+      batch.keys.forEach(k => next.delete(k));
+      persistHidden(next);
+      return next;
+    });
     setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
   };
 
@@ -134,6 +170,7 @@ export function Schedule() {
   const dismissAll = () => setUndoStack([]);
   const undoAll = () => {
     setHidden(new Map());
+    persistHidden(new Map());
     setUndoStack([]);
   };
 
@@ -167,7 +204,7 @@ export function Schedule() {
   return (
     <div>
       <h1>Generate Invigilation Scheme</h1>
-      <p className="help">This generates the full day-by-day schedule, assigning pairs to venues, balancing total invigilation time, and flagging any unfilled slots. You can remove individual slots from this view/export — removing a slot does not delete it from the Exam Timetable, so it will reappear next time you regenerate.</p>
+      <p className="help">This generates the full day-by-day schedule, assigning pairs to venues, balancing total invigilation time, and flagging any unfilled slots. The result stays here while you navigate elsewhere in the app — click Regenerate for a fresh run, or it clears when you close this browser tab. You can remove individual slots from this view/export — removing a slot does not delete it from the Exam Timetable, so it will reappear next time you regenerate.</p>
 
       <div className="btn-row">
         <button className="btn btn-primary" onClick={generate} disabled={loading}>
