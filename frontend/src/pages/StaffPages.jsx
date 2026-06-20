@@ -8,6 +8,7 @@ export function Attendants() {
   const [list, setList] = useState([]);
   const [name, setName] = useState('');
   const [unavail, setUnavail] = useState('');
+  const [selected, setSelected] = useState(new Set());
   const { isAdmin } = useAuth();
   const load = () => api.list().then(r => setList(r.data)).catch(() => {});
   useEffect(() => { load(); }, []);
@@ -19,7 +20,31 @@ export function Attendants() {
     catch (err) { toast.error('Failed'); }
   };
   const update = async (id, field, value) => { try { await api.update(id, { [field]: value }); } catch { toast.error('Failed'); } };
-  const remove = async (id) => { if (!confirm('Remove?')) return; try { await api.remove(id); load(); } catch { toast.error('Failed'); } };
+
+  const remove = async (id) => {
+    if (!confirm('Remove?')) return;
+    setList(prev => prev.filter(a => a.id !== id));
+    setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
+    try { await api.remove(id); toast.success('Removed'); }
+    catch { toast.error('Failed — restoring'); load(); }
+  };
+
+  const toggleSelect = (id) => {
+    setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  };
+  const toggleSelectAll = () => {
+    if (selected.size === list.length) setSelected(new Set());
+    else setSelected(new Set(list.map(a => a.id)));
+  };
+  const removeSelected = async () => {
+    if (!selected.size) return;
+    if (!confirm(`Remove ${selected.size} selected attendant(s)?`)) return;
+    const ids = [...selected];
+    setList(prev => prev.filter(a => !selected.has(a.id)));
+    setSelected(new Set());
+    try { await Promise.all(ids.map(id => api.remove(id))); toast.success(`${ids.length} attendant(s) removed`); }
+    catch { toast.error('Some removals failed — refreshing'); load(); }
+  };
 
   return (
     <div>
@@ -36,11 +61,23 @@ export function Attendants() {
           <div className="btn-row"><button className="btn btn-primary" type="submit">Add attendant</button></div>
         </form>
       )}
+      {isAdmin && selected.size > 0 && (
+        <div className="btn-row" style={{ margin: '12px 0' }}>
+          <button className="btn btn-danger" onClick={removeSelected}>Remove selected ({selected.size})</button>
+          <button className="btn" onClick={() => setSelected(new Set())}>Clear selection</button>
+        </div>
+      )}
       <div className="table-wrap">
         <table>
-          <thead><tr><th>#</th><th>Name</th><th>Unavailable</th>{isAdmin && <th style={{width:70}}></th>}</tr></thead>
+          <thead>
+            <tr>
+              {isAdmin && <th style={{width:30}}><input type="checkbox" checked={selected.size === list.length && list.length > 0} onChange={toggleSelectAll} /></th>}
+              <th>#</th><th>Name</th><th>Unavailable</th>{isAdmin && <th style={{width:70}}></th>}
+            </tr>
+          </thead>
           <tbody>{list.map((a, i) => (
             <tr key={a.id}>
+              {isAdmin && <td><input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleSelect(a.id)} /></td>}
               <td>{i+1}</td>
               <td><input defaultValue={a.name} onBlur={e => update(a.id,'name',e.target.value)} disabled={!isAdmin} /></td>
               <td><input defaultValue={a.unavail} onBlur={e => update(a.id,'unavail',e.target.value)} disabled={!isAdmin} /></td>
@@ -60,6 +97,7 @@ export function Pairs() {
   const [list, setList] = useState([]);
   const [teacherNames, setTeacherNames] = useState([]);
   const [generating, setGenerating] = useState(false);
+  const [selected, setSelected] = useState(new Set());
   const { isAdmin } = useAuth();
   const load = () => Promise.all([pairsApi.list(), teachersApi.list()]).then(([p, t]) => { setList(p.data); setTeacherNames(t.data.map(x => x.name)); }).catch(() => {});
   useEffect(() => { load(); }, []);
@@ -82,7 +120,31 @@ export function Pairs() {
   };
 
   const update = async (id, field, value) => { try { await pairsApi.update(id, { [field]: value }); } catch { toast.error('Failed'); } };
-  const remove = async (id) => { if (!confirm('Remove pair?')) return; try { await pairsApi.remove(id); load(); } catch { toast.error('Failed'); } };
+
+  const remove = async (id) => {
+    if (!confirm('Remove pair?')) return;
+    setList(prev => prev.filter(p => p.id !== id));
+    setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
+    try { await pairsApi.remove(id); toast.success('Removed'); }
+    catch { toast.error('Failed — restoring'); load(); }
+  };
+
+  const toggleSelect = (id) => {
+    setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  };
+  const toggleSelectAll = () => {
+    if (selected.size === list.length) setSelected(new Set());
+    else setSelected(new Set(list.map(p => p.id)));
+  };
+  const removeSelected = async () => {
+    if (!selected.size) return;
+    if (!confirm(`Remove ${selected.size} selected pair(s)?`)) return;
+    const ids = [...selected];
+    setList(prev => prev.filter(p => !selected.has(p.id)));
+    setSelected(new Set());
+    try { await Promise.all(ids.map(id => pairsApi.remove(id))); toast.success(`${ids.length} pair(s) removed`); }
+    catch { toast.error('Some removals failed — refreshing'); load(); }
+  };
 
   const usedA = new Set(list.map(p => p.member_a).filter(Boolean));
   const usedB = new Set(list.map(p => p.member_b).filter(Boolean));
@@ -98,15 +160,27 @@ export function Pairs() {
           <button className="btn" onClick={add}>Add empty pair</button>
         </div>
       )}
+      {isAdmin && selected.size > 0 && (
+        <div className="btn-row" style={{ margin: '12px 0' }}>
+          <button className="btn btn-danger" onClick={removeSelected}>Remove selected ({selected.size})</button>
+          <button className="btn" onClick={() => setSelected(new Set())}>Clear selection</button>
+        </div>
+      )}
       <div className="table-wrap">
         <table>
-          <thead><tr><th>#</th><th>Member 1</th><th>Member 2</th>{isAdmin && <th style={{width:70}}></th>}</tr></thead>
+          <thead>
+            <tr>
+              {isAdmin && <th style={{width:30}}><input type="checkbox" checked={selected.size === list.length && list.length > 0} onChange={toggleSelectAll} /></th>}
+              <th>#</th><th>Member 1</th><th>Member 2</th>{isAdmin && <th style={{width:70}}></th>}
+            </tr>
+          </thead>
           <tbody>{list.map((p, i) => {
             const opts = (selected) => ['', ...teacherNames].map(n =>
               `<option value="${n}" ${n===selected?'selected':''}>${n || '-- select --'}</option>`
             ).join('');
             return (
               <tr key={p.id} style={p.member_a && p.member_a === p.member_b ? {background:'var(--warn-light)'} : {}}>
+                {isAdmin && <td><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} /></td>}
                 <td>{i+1}</td>
                 <td>
                   <select defaultValue={p.member_a} onChange={e => update(p.id,'member_a',e.target.value)} disabled={!isAdmin}

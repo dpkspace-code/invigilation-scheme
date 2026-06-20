@@ -9,6 +9,7 @@ export default function Teachers() {
   const [name, setName] = useState('');
   const [subject, setSubject] = useState('');
   const [unavail, setUnavail] = useState('');
+  const [selected, setSelected] = useState(new Set());
   const { isAdmin } = useAuth();
 
   const load = () => api.list().then(r => setList(r.data)).catch(() => {}).finally(() => setLoading(false));
@@ -33,8 +34,35 @@ export default function Teachers() {
 
   const remove = async (id) => {
     if (!confirm('Remove this teacher?')) return;
-    try { await api.remove(id); toast.success('Removed'); load(); }
-    catch (err) { toast.error('Failed'); }
+    setList(prev => prev.filter(t => t.id !== id));
+    setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
+    try { await api.remove(id); toast.success('Removed'); }
+    catch (err) { toast.error('Failed to remove — restoring'); load(); }
+  };
+
+  const toggleSelect = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === list.length) setSelected(new Set());
+    else setSelected(new Set(list.map(t => t.id)));
+  };
+
+  const removeSelected = async () => {
+    if (!selected.size) return;
+    if (!confirm(`Remove ${selected.size} selected teacher(s)?`)) return;
+    const ids = [...selected];
+    setList(prev => prev.filter(t => !selected.has(t.id)));
+    setSelected(new Set());
+    try {
+      await Promise.all(ids.map(id => api.remove(id)));
+      toast.success(`${ids.length} teacher(s) removed`);
+    } catch (err) { toast.error('Some removals failed — refreshing'); load(); }
   };
 
   if (loading) return <div className="help">Loading…</div>;
@@ -57,12 +85,25 @@ export default function Teachers() {
         </form>
       )}
 
+      {isAdmin && selected.size > 0 && (
+        <div className="btn-row" style={{ margin: '12px 0' }}>
+          <button className="btn btn-danger" onClick={removeSelected}>Remove selected ({selected.size})</button>
+          <button className="btn" onClick={() => setSelected(new Set())}>Clear selection</button>
+        </div>
+      )}
+
       <div className="table-wrap">
         <table>
-          <thead><tr><th>#</th><th>Name</th><th>Subject</th><th>Unavailable</th>{isAdmin && <th style={{width:70}}></th>}</tr></thead>
+          <thead>
+            <tr>
+              {isAdmin && <th style={{width:30}}><input type="checkbox" checked={selected.size === list.length && list.length > 0} onChange={toggleSelectAll} /></th>}
+              <th>#</th><th>Name</th><th>Subject</th><th>Unavailable</th>{isAdmin && <th style={{width:70}}></th>}
+            </tr>
+          </thead>
           <tbody>
             {list.map((t, i) => (
               <tr key={t.id}>
+                {isAdmin && <td><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)} /></td>}
                 <td style={{fontFamily:'var(--mono)',fontSize:11}}>{i+1}</td>
                 <td><input defaultValue={t.name} onBlur={e => update(t.id, 'name', e.target.value)} disabled={!isAdmin} /></td>
                 <td><input defaultValue={t.subject} onBlur={e => update(t.id, 'subject', e.target.value)} disabled={!isAdmin} /></td>
