@@ -7,9 +7,11 @@ const SLOTS = Array.from({length: 20}, (_, i) => `Slot ${i+1}`);
 const DEFAULT_GRADES = ['Grade 7','Grade 7 (Ext)','Grade 8','Grade 9','Grade 10','Grade 11','Grade 12','Grade 13','PVE'];
 const DEFAULT_SUBJECTS = ['Economics','General Paper','Hindi','Commerce','Physics','Social Studies','Business Studies','Art','Food & Textile Studies','Computer Science','Mathematics','Additional Mathematics','French','Design','English','Biology','Chemistry','Hinduism','ICT','Sociology','Travel & Tourism','Entrepreneurship Education','Life Skills','Physical Education','Accounting'];
 
-const QUICK_START_TIMES = (() => {
+// Common exam times at the school: 08:30 -> 16:30 in 15-min steps, used for both
+// the quick start-time row and the quick end-time row.
+const QUICK_TIMES = (() => {
   const out = [];
-  for (let mins = 8*60+30; mins <= 14*60+30; mins += 30) {
+  for (let mins = 8*60+30; mins <= 16*60+30; mins += 15) {
     const h = String(Math.floor(mins/60)).padStart(2,'0');
     const m = String(mins%60).padStart(2,'0');
     out.push(`${h}:${m}`);
@@ -17,31 +19,12 @@ const QUICK_START_TIMES = (() => {
   return out;
 })();
 
-const QUICK_DURATIONS = [
-  { label: '1h', minutes: 60 },
-  { label: '1h15', minutes: 75 },
-  { label: '1h30', minutes: 90 },
-  { label: '1h45', minutes: 105 },
-  { label: '2h', minutes: 120 },
-  { label: '2h30', minutes: 150 },
-  { label: '3h', minutes: 180 },
-];
-
 function computeDuration(start, end) {
   if (!start || !end) return null;
   const [sh, sm] = start.split(':').map(Number);
   const [eh, em] = end.split(':').map(Number);
   const diff = (eh * 60 + em) - (sh * 60 + sm);
   return diff > 0 ? diff : null;
-}
-
-function addMinutes(start, minutes) {
-  if (!start) return '';
-  const [h, m] = start.split(':').map(Number);
-  const total = h * 60 + m + minutes;
-  const eh = String(Math.floor((total % (24*60)) / 60)).padStart(2, '0');
-  const em = String(total % 60).padStart(2, '0');
-  return `${eh}:${em}`;
 }
 
 export default function Exams() {
@@ -76,19 +59,15 @@ export default function Exams() {
 
   const pickStartTime = (t) => {
     setForm(f => {
-      const prevDuration = computeDuration(f.start_time, f.end_time);
-      const end = prevDuration ? addMinutes(t, prevDuration) : f.end_time;
-      const nf = { ...f, start_time: t, end_time: end };
+      const nf = { ...f, start_time: t };
       setDuration(computeDuration(nf.start_time, nf.end_time));
       return nf;
     });
   };
 
-  const pickDuration = (minutes) => {
+  const pickEndTime = (t) => {
     setForm(f => {
-      if (!f.start_time) { toast.error('Pick a start time first'); return f; }
-      const end = addMinutes(f.start_time, minutes);
-      const nf = { ...f, end_time: end };
+      const nf = { ...f, end_time: t };
       setDuration(computeDuration(nf.start_time, nf.end_time));
       return nf;
     });
@@ -204,10 +183,10 @@ export default function Exams() {
           <div className="field" style={{marginTop:4}}>
             <label>Quick start time</label>
             <div className="pillrow">
-              {QUICK_START_TIMES.map(t => (
+              {QUICK_TIMES.map(t => (
                 <button
                   type="button"
-                  key={t}
+                  key={`start-${t}`}
                   className={`btn btn-sm ${form.start_time === t ? 'btn-primary' : ''}`}
                   onClick={() => pickStartTime(t)}
                 >
@@ -218,16 +197,16 @@ export default function Exams() {
           </div>
 
           <div className="field" style={{marginTop:4}}>
-            <label>Quick duration</label>
+            <label>Quick end time</label>
             <div className="pillrow">
-              {QUICK_DURATIONS.map(d => (
+              {QUICK_TIMES.map(t => (
                 <button
                   type="button"
-                  key={d.minutes}
-                  className={`btn btn-sm ${duration === d.minutes ? 'btn-primary' : ''}`}
-                  onClick={() => pickDuration(d.minutes)}
+                  key={`end-${t}`}
+                  className={`btn btn-sm ${form.end_time === t ? 'btn-primary' : ''}`}
+                  onClick={() => pickEndTime(t)}
                 >
-                  {d.label}
+                  {t}
                 </button>
               ))}
             </div>
@@ -235,7 +214,7 @@ export default function Exams() {
 
           {duration != null && <div className="note">Duration: {duration} min ({(duration/60).toFixed(2)}h)</div>}
           <div className="btn-row"><button className="btn btn-primary" type="submit">Add exam row</button></div>
-          <p className="help" style={{marginTop:8}}>Tip: date, slot, start and end time stay filled in after each add — only venue, grade, subject, and candidates clear, so you can rapid-fire through every room for the same exam session.</p>
+          <p className="help" style={{marginTop:8}}>Tip: date, slot, start and end time stay filled in after each add — only venue, grade, subject, and candidates clear, so you can rapid-fire through every room for the same exam session. You can also type or use the native picker in the Start/End time boxes directly instead of the quick buttons.</p>
         </form>
       )}
 
