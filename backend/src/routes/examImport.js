@@ -2,6 +2,7 @@ const router = require('express').Router();
 const multer = require('multer');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { authMiddleware } = require('../middleware/auth');
+const XLSX = require('xlsx');
 
 router.use(authMiddleware);
 
@@ -93,4 +94,97 @@ router.post('/import', upload.array('files', 10), async (req, res) => {
   }
 });
 
+// Normalize a header cell into a canonical field name we recognize
+function normalizeHeader(h) {
+  const s = String(h || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (['date', 'examdate'].includes(s)) return 'exam_date';
+  if (['grade', 'form', 'year', 'class'].includes(s)) return 'grade';
+  if (['subject', 'paper'].includes(s)) return 'subject';
+  if (['start', 'starttime', 'from'].includes(s)) return 'start_time';
+  if (['end', 'endtime', 'to'].includes(s)) return 'end_time';
+  if (['venue', 'room', 'location'].includes(s)) return 'venue';
+  if (['candidates', 'students', 'numcandidates', 'count'].includes(s)) return 'candidates';
+  return null;
+}
+
+function normalizeDate(value) {
+  if (value == null || value === '') return '';
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+  if (typeof value === 'number') {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      const mm = String(parsed.m).padStart(2, '0');
+      const dd = String(parsed.d).padStart(2, '0');
+      return `${parsed.y}-${mm}-${dd}`;
+    }
+  }
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  return s;
+}
+
+function normalizeTime(value) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'number') {
+    const totalMinutes = Math.round(value * 24 * 60);
+    const h = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+    const m = String(totalMinutes % 60).padStart(2, '0');
+    return `${h}:${m}`;
+  }
+  const s = String(value).trim();
+  const m = s.match(/(\d{1,2})[:.](\d{2})/);
+  if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+  return s;
+}
+
+// POST /api/exams/import-spreadsheet  (multipart/form-data, field name: file, single file)
+// Reads an Excel/CSV file directly — no AI involved, deterministic column mapping.
+router.post('/import-spreadsheet', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+    const firstSheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[firstSheetName];
+    const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+    if (raw.length < 2) {
+      return res.status(400).json({ error: 'Spreadsheet appears to have no data rows below the header' });
+    }
+
+    const headerRow = raw[0];
+    const fieldMap = headerRow.map(normalizeHeader);
+
+    if (!fieldMap.includes('exam_date') && !fieldMap.includes('subject')) {
+      return res.status(400).json({ error: 'Could not recognize column headers. Expected columns like Date, Grade, Subject, Start, End, Venue, Candidates.' });
+    }
+
+    const rows = [];
+    for (let i = 1; i < raw.length; i++) {
+      const dataRow = raw[i];
+      if (dataRow.every(cell => cell === '' || cell == null)) continue;
+
+      const row = { exam_date: '', grade: '', subject: '', start_time: '', end_time: '', venue: '', candidates: null };
+      fieldMap.forEach((field, idx) => {
+        if (!field) return;
+        const cell = dataRow[idx];
+        if (field === 'exam_date') row.exam_date = normalizeDate(cell);
+        else if (field === 'start_time') row.start_time = normalizeTime(cell);
+        else if (field === 'end_time') row.end_time = normalizeTime(cell);
+        else if (field === 'candidates') row.candidates = cell !== '' && cell != null ? Number(cell) : null;
+        else row[field] = String(cell ?? '').trim();
+      });
+
+      if (row.exam_date || row.subject) rows.push(row);
+    }
+
+    return res.json({ rows, fileCount: 1 });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 module.exports = router;
