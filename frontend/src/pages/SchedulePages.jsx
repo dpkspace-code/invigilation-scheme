@@ -1,5 +1,5 @@
 // Workload.jsx — live auto-refreshing invigilator workload
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import api, { schedule as scheduleApi, teachers as teachersApi, attendants as attendantsApi } from '../api';
 import toast from 'react-hot-toast';
 
@@ -93,7 +93,8 @@ export function Workload() {
 }
 
 // Schedule.jsx — full generated scheme with export, per-row hide + persistent undo,
-// persisted to sessionStorage, plus inline per-invigilator removal/replacement.
+// persisted to sessionStorage, plus inline per-invigilator removal/replacement
+// (picker renders as a full-width row below the slot, not a clipped popup).
 export function Schedule() {
   const STORAGE_KEY = 'invig_schedule_result_v1';
   const HIDDEN_KEY = 'invig_schedule_hidden_v1';
@@ -313,8 +314,13 @@ export function Schedule() {
                 <table>
                   <thead><tr><th>Slot</th><th>Start</th><th>End</th><th>Duration</th><th>Candidates</th><th>Grade</th><th>Subject</th><th>Venue</th><th>Invigilators</th><th style={{width:70}}></th></tr></thead>
                   <tbody>
-                    {byDate[date].map((row, i) => (
-                      <tr key={i}>
+                    {byDate[date].map((row, i) => {
+                      const rowHasOpenPicker = row.pairsList.some(a =>
+                        a.type !== 'unfilled' && a.members.filter(Boolean).some(name => personKey(row, name) === pickerKey)
+                      );
+                      return (
+                      <React.Fragment key={i}>
+                      <tr>
                         <td>{row.exam.slot}</td>
                         <td>{row.exam.start_time}</td>
                         <td>{row.exam.end_time}</td>
@@ -333,40 +339,14 @@ export function Schedule() {
                                 a.members.filter(Boolean).map(name => {
                                   const pKey = personKey(row, name);
                                   return (
-                                    <span key={name} style={{display:'inline-flex',alignItems:'center',gap:4,marginRight:8,position:'relative'}}>
+                                    <span key={name} style={{display:'inline-flex',alignItems:'center',gap:4,marginRight:8}}>
                                       <span>{name}{a.type==='attendant' && <span className="badge badge-viewer" style={{marginLeft:4}}>attendant</span>}</span>
                                       <button
                                         className="btn btn-sm btn-danger"
-                                        style={{padding:'1px 6px',fontSize:10}}
+                                        style={{padding:'1px 6px',fontSize:10, background: pickerKey === pKey ? 'var(--accent)' : undefined}}
                                         title="Remove and replace this invigilator for this slot"
                                         onClick={() => openPicker(row, name)}
                                       >✕</button>
-                                      {pickerKey === pKey && (
-                                        <span className="card" style={{display:'block',marginTop:4,padding:8,position:'absolute',top:'100%',left:0,zIndex:5,background:'var(--paper)',minWidth:220}}>
-                                          {pickerLoading ? (
-                                            <span className="help">Loading candidates…</span>
-                                          ) : pickerCandidates.length === 0 ? (
-                                            <span className="help">No available candidates found.</span>
-                                          ) : (
-                                            <span style={{display:'flex',flexWrap:'wrap',gap:6,maxWidth:300}}>
-                                              {pickerCandidates.map((c, ci) => (
-                                                <button
-                                                  key={ci}
-                                                  className="btn btn-sm"
-                                                  style={{
-                                                    background: c.type === 'teacher' ? '#e3f2fd' : '#f3e5f5',
-                                                    border: '1px solid',
-                                                    borderColor: c.type === 'teacher' ? '#1976d2' : '#7b1fa2',
-                                                  }}
-                                                  onClick={() => confirmInlineReplacement(row, name, c)}
-                                                >
-                                                  {c.name} ({c.type})
-                                                </button>
-                                              ))}
-                                            </span>
-                                          )}
-                                        </span>
-                                      )}
                                     </span>
                                   );
                                 })
@@ -376,7 +356,43 @@ export function Schedule() {
                         </td>
                         <td><button className="btn btn-sm btn-danger" onClick={() => hideRow(row)}>Remove</button></td>
                       </tr>
-                    ))}
+                      {rowHasOpenPicker && (
+                        <tr>
+                          <td colSpan={10} style={{ background: '#fffbea', padding: 12, borderTop: '2px solid var(--accent)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, marginBottom: 8, fontWeight: 'bold' }}>
+                              Replacing {pickerKey?.split('|')[3]} — pick a replacement for {row.exam.slot} · {row.exam.venue}:
+                            </div>
+                            {pickerLoading ? (
+                              <span className="help">Loading candidates…</span>
+                            ) : pickerCandidates.length === 0 ? (
+                              <span className="help">No available candidates found.</span>
+                            ) : (
+                              <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                                {pickerCandidates.map((c, ci) => (
+                                  <button
+                                    key={ci}
+                                    className="btn btn-sm"
+                                    style={{
+                                      background: c.type === 'teacher' ? '#e3f2fd' : '#f3e5f5',
+                                      border: '1px solid',
+                                      borderColor: c.type === 'teacher' ? '#1976d2' : '#7b1fa2',
+                                      padding: '6px 12px',
+                                      fontSize: 12,
+                                    }}
+                                    onClick={() => confirmInlineReplacement(row, pickerKey.split('|')[3], c)}
+                                  >
+                                    {c.name} ({c.type})
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            <button className="btn btn-sm" style={{marginTop:8}} onClick={() => setPickerKey(null)}>Cancel</button>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
