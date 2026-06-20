@@ -4,13 +4,14 @@ import { attendants as api } from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 
-const UNDO_WINDOW_MS = 6000;
+const SAFETY_COMMIT_MS = 2 * 60 * 1000;
 
 export function Attendants() {
   const [list, setList] = useState([]);
   const [name, setName] = useState('');
   const [unavail, setUnavail] = useState('');
   const [selected, setSelected] = useState(new Set());
+  const [undoStack, setUndoStack] = useState([]);
   const { isAdmin } = useAuth();
   const pendingDeletes = useRef(new Map());
   const load = () => api.list().then(r => setList(r.data)).catch(() => {});
@@ -30,12 +31,41 @@ export function Attendants() {
     api.remove(id).catch(() => { toast.error('Failed to remove on server'); load(); });
     pendingDeletes.current.delete(id);
   };
-  const undoDelete = (id) => {
-    const entry = pendingDeletes.current.get(id);
-    if (!entry) return;
-    clearTimeout(entry.timer);
-    pendingDeletes.current.delete(id);
-    setList(prev => prev.some(a => a.id === id) ? prev : [...prev, entry.record].sort((a,b)=>(a.sort_order??0)-(b.sort_order??0)));
+
+  const dismissBatch = (batchId) => {
+    setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+    pendingDeletes.current.forEach((entry, id) => {
+      if (entry.batchId === batchId) { clearTimeout(entry.timer); commitDelete(id); }
+    });
+  };
+
+  const undoBatch = (batchId) => {
+    const batch = undoStack.find(b => b.batchId === batchId);
+    if (!batch) return;
+    const restored = [];
+    batch.records.forEach(record => {
+      const entry = pendingDeletes.current.get(record.id);
+      if (entry) { clearTimeout(entry.timer); pendingDeletes.current.delete(record.id); restored.push(record); }
+    });
+    setList(prev => {
+      const ids = new Set(prev.map(a => a.id));
+      const toAdd = restored.filter(r => !ids.has(r.id));
+      return [...prev, ...toAdd].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    });
+    setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+    toast.success(`Restored ${restored.length} attendant(s)`);
+  };
+
+  const startBatchDelete = (records, label) => {
+    const batchId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    records.forEach(record => {
+      const timer = setTimeout(() => {
+        commitDelete(record.id);
+        setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+      }, SAFETY_COMMIT_MS);
+      pendingDeletes.current.set(record.id, { record, timer, batchId });
+    });
+    setUndoStack(prev => [...prev, { batchId, label, records }]);
   };
 
   const remove = (id) => {
@@ -44,33 +74,19 @@ export function Attendants() {
     if (!confirm('Remove?')) return;
     setList(prev => prev.filter(a => a.id !== id));
     setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
-    const timer = setTimeout(() => commitDelete(id), UNDO_WINDOW_MS);
-    pendingDeletes.current.set(id, { record, timer });
-    toast((t) => (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        Removed "{record.name}"
-        <button className="btn btn-sm" onClick={() => { undoDelete(id); toast.dismiss(t.id); }}>Undo</button>
-      </span>
-    ), { duration: UNDO_WINDOW_MS });
+    startBatchDelete([record], `Removed "${record.name}"`);
   };
 
   const toggleSelect = (id) => { setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); };
   const toggleSelectAll = () => { if (selected.size === list.length) setSelected(new Set()); else setSelected(new Set(list.map(a => a.id))); };
+
   const removeSelected = () => {
     if (!selected.size) return;
-    const ids = [...selected];
-    if (!confirm(`Remove ${ids.length} selected attendant(s)?`)) return;
     const records = list.filter(a => selected.has(a.id));
+    if (!confirm(`Remove ${records.length} selected attendant(s)?`)) return;
     setList(prev => prev.filter(a => !selected.has(a.id)));
     setSelected(new Set());
-    const timer = setTimeout(() => { ids.forEach(id => { if (pendingDeletes.current.has(id)) commitDelete(id); }); }, UNDO_WINDOW_MS);
-    records.forEach(r => pendingDeletes.current.set(r.id, { record: r, timer }));
-    toast((t) => (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        Removed {ids.length} attendant(s)
-        <button className="btn btn-sm" onClick={() => { ids.forEach(undoDelete); toast.dismiss(t.id); }}>Undo</button>
-      </span>
-    ), { duration: UNDO_WINDOW_MS });
+    startBatchDelete(records, `Removed ${records.length} attendant(s)`);
   };
 
   return (
@@ -78,6 +94,23 @@ export function Attendants() {
       <h1>Attendants</h1>
       <p className="subtitle">{list.length} attendant(s)</p>
       <p className="help">Attendants are paired two-by-two in the order listed and used as backup when teacher pairs can't cover a session. Leave empty if not used.</p>
+
+      {undoStack.length > 0 && (
+        <div className="card" style={{ background: 'var(--warn-light, #fff8e1)', marginBottom: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {undoStack.map(batch => (
+              <div key={batch.batchId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <span>{batch.label}</span>
+                <div className="btn-row" style={{ margin: 0 }}>
+                  <button className="btn btn-sm btn-primary" onClick={() => undoBatch(batch.batchId)}>Undo</button>
+                  <button className="btn btn-sm" onClick={() => dismissBatch(batch.batchId)}>Dismiss</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {isAdmin && (
         <form className="card" onSubmit={add}>
           <h2>Add attendant</h2>
@@ -125,6 +158,7 @@ export function Pairs() {
   const [teacherNames, setTeacherNames] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [selected, setSelected] = useState(new Set());
+  const [undoStack, setUndoStack] = useState([]);
   const { isAdmin } = useAuth();
   const pendingDeletes = useRef(new Map());
   const load = () => Promise.all([pairsApi.list(), teachersApi.list()]).then(([p, t]) => { setList(p.data); setTeacherNames(t.data.map(x => x.name)); }).catch(() => {});
@@ -155,12 +189,41 @@ export function Pairs() {
     pairsApi.remove(id).catch(() => { toast.error('Failed to remove on server'); load(); });
     pendingDeletes.current.delete(id);
   };
-  const undoDelete = (id) => {
-    const entry = pendingDeletes.current.get(id);
-    if (!entry) return;
-    clearTimeout(entry.timer);
-    pendingDeletes.current.delete(id);
-    setList(prev => prev.some(p => p.id === id) ? prev : [...prev, entry.record].sort((a,b)=>(a.sort_order??0)-(b.sort_order??0)));
+
+  const dismissBatch = (batchId) => {
+    setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+    pendingDeletes.current.forEach((entry, id) => {
+      if (entry.batchId === batchId) { clearTimeout(entry.timer); commitDelete(id); }
+    });
+  };
+
+  const undoBatch = (batchId) => {
+    const batch = undoStack.find(b => b.batchId === batchId);
+    if (!batch) return;
+    const restored = [];
+    batch.records.forEach(record => {
+      const entry = pendingDeletes.current.get(record.id);
+      if (entry) { clearTimeout(entry.timer); pendingDeletes.current.delete(record.id); restored.push(record); }
+    });
+    setList(prev => {
+      const ids = new Set(prev.map(p => p.id));
+      const toAdd = restored.filter(r => !ids.has(r.id));
+      return [...prev, ...toAdd].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    });
+    setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+    toast.success(`Restored ${restored.length} pair(s)`);
+  };
+
+  const startBatchDelete = (records, label) => {
+    const batchId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    records.forEach(record => {
+      const timer = setTimeout(() => {
+        commitDelete(record.id);
+        setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+      }, SAFETY_COMMIT_MS);
+      pendingDeletes.current.set(record.id, { record, timer, batchId });
+    });
+    setUndoStack(prev => [...prev, { batchId, label, records }]);
   };
 
   const remove = (id) => {
@@ -169,33 +232,19 @@ export function Pairs() {
     if (!confirm('Remove pair?')) return;
     setList(prev => prev.filter(p => p.id !== id));
     setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
-    const timer = setTimeout(() => commitDelete(id), UNDO_WINDOW_MS);
-    pendingDeletes.current.set(id, { record, timer });
-    toast((t) => (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        Removed pair
-        <button className="btn btn-sm" onClick={() => { undoDelete(id); toast.dismiss(t.id); }}>Undo</button>
-      </span>
-    ), { duration: UNDO_WINDOW_MS });
+    startBatchDelete([record], `Removed pair`);
   };
 
   const toggleSelect = (id) => { setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); };
   const toggleSelectAll = () => { if (selected.size === list.length) setSelected(new Set()); else setSelected(new Set(list.map(p => p.id))); };
+
   const removeSelected = () => {
     if (!selected.size) return;
-    const ids = [...selected];
-    if (!confirm(`Remove ${ids.length} selected pair(s)?`)) return;
     const records = list.filter(p => selected.has(p.id));
+    if (!confirm(`Remove ${records.length} selected pair(s)?`)) return;
     setList(prev => prev.filter(p => !selected.has(p.id)));
     setSelected(new Set());
-    const timer = setTimeout(() => { ids.forEach(id => { if (pendingDeletes.current.has(id)) commitDelete(id); }); }, UNDO_WINDOW_MS);
-    records.forEach(r => pendingDeletes.current.set(r.id, { record: r, timer }));
-    toast((t) => (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        Removed {ids.length} pair(s)
-        <button className="btn btn-sm" onClick={() => { ids.forEach(undoDelete); toast.dismiss(t.id); }}>Undo</button>
-      </span>
-    ), { duration: UNDO_WINDOW_MS });
+    startBatchDelete(records, `Removed ${records.length} pair(s)`);
   };
 
   const usedA = new Set(list.map(p => p.member_a).filter(Boolean));
@@ -206,6 +255,23 @@ export function Pairs() {
       <h1>Invigilator Pairs</h1>
       <p className="subtitle">{list.filter(p=>p.member_a&&p.member_b&&p.member_a!==p.member_b).length} usable pair(s)</p>
       <p className="help">Fixed pairs for the whole exam period. Each pair is assigned to rooms as a unit. Use the dropdowns to change who's paired with whom.</p>
+
+      {undoStack.length > 0 && (
+        <div className="card" style={{ background: 'var(--warn-light, #fff8e1)', marginBottom: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {undoStack.map(batch => (
+              <div key={batch.batchId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <span>{batch.label}</span>
+                <div className="btn-row" style={{ margin: 0 }}>
+                  <button className="btn btn-sm btn-primary" onClick={() => undoBatch(batch.batchId)}>Undo</button>
+                  <button className="btn btn-sm" onClick={() => dismissBatch(batch.batchId)}>Dismiss</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {isAdmin && (
         <div className="btn-row">
           <button className="btn btn-primary" onClick={regenerate} disabled={generating}>Regenerate (sequential)</button>

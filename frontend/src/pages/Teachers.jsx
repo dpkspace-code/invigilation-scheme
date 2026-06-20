@@ -3,7 +3,7 @@ import { teachers as api } from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 
-const UNDO_WINDOW_MS = 6000;
+const SAFETY_COMMIT_MS = 2 * 60 * 1000; // 2 minutes
 
 export default function Teachers() {
   const [list, setList] = useState([]);
@@ -12,6 +12,7 @@ export default function Teachers() {
   const [subject, setSubject] = useState('');
   const [unavail, setUnavail] = useState('');
   const [selected, setSelected] = useState(new Set());
+  const [undoStack, setUndoStack] = useState([]);
   const { isAdmin } = useAuth();
   const pendingDeletes = useRef(new Map());
 
@@ -42,36 +43,56 @@ export default function Teachers() {
     pendingDeletes.current.delete(id);
   };
 
-  const undoDelete = (id) => {
-    const entry = pendingDeletes.current.get(id);
-    if (!entry) return;
-    clearTimeout(entry.timer);
-    pendingDeletes.current.delete(id);
-    setList(prev => {
-      if (prev.some(t => t.id === id)) return prev;
-      return [...prev, entry.record].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const dismissBatch = (batchId) => {
+    setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+    pendingDeletes.current.forEach((entry, id) => {
+      if (entry.batchId === batchId) {
+        clearTimeout(entry.timer);
+        commitDelete(id);
+      }
     });
+  };
+
+  const undoBatch = (batchId) => {
+    const batch = undoStack.find(b => b.batchId === batchId);
+    if (!batch) return;
+    const restored = [];
+    batch.records.forEach(record => {
+      const entry = pendingDeletes.current.get(record.id);
+      if (entry) {
+        clearTimeout(entry.timer);
+        pendingDeletes.current.delete(record.id);
+        restored.push(record);
+      }
+    });
+    setList(prev => {
+      const ids = new Set(prev.map(t => t.id));
+      const toAdd = restored.filter(r => !ids.has(r.id));
+      return [...prev, ...toAdd].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    });
+    setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+    toast.success(`Restored ${restored.length} teacher(s)`);
+  };
+
+  const startBatchDelete = (records, label) => {
+    const batchId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    records.forEach(record => {
+      const timer = setTimeout(() => {
+        commitDelete(record.id);
+        setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
+      }, SAFETY_COMMIT_MS);
+      pendingDeletes.current.set(record.id, { record, timer, batchId });
+    });
+    setUndoStack(prev => [...prev, { batchId, label, records }]);
   };
 
   const remove = (id) => {
     const record = list.find(t => t.id === id);
     if (!record) return;
     if (!confirm('Remove this teacher?')) return;
-
     setList(prev => prev.filter(t => t.id !== id));
     setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
-
-    const timer = setTimeout(() => commitDelete(id), UNDO_WINDOW_MS);
-    pendingDeletes.current.set(id, { record, timer });
-
-    toast((t) => (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        Removed "{record.name}"
-        <button className="btn btn-sm" onClick={() => { undoDelete(id); toast.dismiss(t.id); }}>
-          Undo
-        </button>
-      </span>
-    ), { duration: UNDO_WINDOW_MS });
+    startBatchDelete([record], `Removed "${record.name}"`);
   };
 
   const toggleSelect = (id) => {
@@ -89,26 +110,11 @@ export default function Teachers() {
 
   const removeSelected = () => {
     if (!selected.size) return;
-    const ids = [...selected];
-    if (!confirm(`Remove ${ids.length} selected teacher(s)?`)) return;
-
     const records = list.filter(t => selected.has(t.id));
+    if (!confirm(`Remove ${records.length} selected teacher(s)?`)) return;
     setList(prev => prev.filter(t => !selected.has(t.id)));
     setSelected(new Set());
-
-    const timer = setTimeout(() => {
-      ids.forEach(id => { if (pendingDeletes.current.has(id)) commitDelete(id); });
-    }, UNDO_WINDOW_MS);
-    records.forEach(r => pendingDeletes.current.set(r.id, { record: r, timer }));
-
-    toast((t) => (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        Removed {ids.length} teacher(s)
-        <button className="btn btn-sm" onClick={() => { ids.forEach(undoDelete); toast.dismiss(t.id); }}>
-          Undo
-        </button>
-      </span>
-    ), { duration: UNDO_WINDOW_MS });
+    startBatchDelete(records, `Removed ${records.length} teacher(s)`);
   };
 
   if (loading) return <div className="help">Loading…</div>;
@@ -118,6 +124,22 @@ export default function Teachers() {
       <h1>Teaching Staff</h1>
       <p className="subtitle">{list.length} staff members</p>
       <p className="help">Pre-loaded with all staff. Edit names, add subjects (used for the "avoid own subject" rule), or mark dates/slots when someone is unavailable — e.g. <code>28.06</code> for a full day, or <code>28.06 Slot 2</code> for one slot.</p>
+
+      {undoStack.length > 0 && (
+        <div className="card" style={{ background: 'var(--warn-light, #fff8e1)', marginBottom: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {undoStack.map(batch => (
+              <div key={batch.batchId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <span>{batch.label}</span>
+                <div className="btn-row" style={{ margin: 0 }}>
+                  <button className="btn btn-sm btn-primary" onClick={() => undoBatch(batch.batchId)}>Undo</button>
+                  <button className="btn btn-sm" onClick={() => dismissBatch(batch.batchId)}>Dismiss</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isAdmin && (
         <form className="card" onSubmit={add}>
