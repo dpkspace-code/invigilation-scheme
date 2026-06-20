@@ -3,6 +3,7 @@ const multer = require('multer');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { authMiddleware } = require('../middleware/auth');
 const XLSX = require('xlsx');
+const db = require('../db');
 
 router.use(authMiddleware);
 
@@ -37,7 +38,6 @@ function fileToGeminiPart(file) {
 }
 
 function extractJsonArray(text) {
-  // Gemini sometimes wraps output in markdown fences despite instructions — strip them defensively
   const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
   const start = cleaned.indexOf('[');
   const end = cleaned.lastIndexOf(']');
@@ -77,7 +77,6 @@ router.post('/import', upload.array('files', 10), async (req, res) => {
       return res.status(502).json({ error: 'AI response was not a list of exam rows' });
     }
 
-    // Light normalization so the preview table has consistent shape
     const normalized = rows.map(r => ({
       exam_date: r.exam_date || '',
       grade: r.grade || '',
@@ -94,7 +93,8 @@ router.post('/import', upload.array('files', 10), async (req, res) => {
   }
 });
 
-// Normalize a header cell into a canonical field name we recognize
+// ---- Spreadsheet (Excel/CSV) parsing — no AI needed ----
+
 function normalizeHeader(h) {
   const s = String(h || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
   if (['date', 'examdate'].includes(s)) return 'exam_date';
@@ -142,7 +142,6 @@ function normalizeTime(value) {
 }
 
 // POST /api/exams/import-spreadsheet  (multipart/form-data, field name: file, single file)
-// Reads an Excel/CSV file directly — no AI involved, deterministic column mapping.
 router.post('/import-spreadsheet', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -187,4 +186,51 @@ router.post('/import-spreadsheet', upload.single('file'), async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 });
+
+// ---- Confirm & save ----
+
+// POST /api/exams/import/confirm
+// Body: { rows: [{ exam_date, grade, subject, start_time, end_time, venue, candidates }, ...] }
+// Bulk-inserts the (possibly user-edited) reviewed rows into the exams table, appending to
+// whatever exam rows already exist. Defaults slot to 'Slot 1' since neither extraction path
+// determines slot — user can fix slot afterward on the Exam Timetable page like any manual row.
+router.post('/import/confirm', async (req, res) => {
+  try {
+    const { rows } = req.body;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'rows array is required and must be non-empty' });
+    }
+
+    const existingCountRes = await db.query('SELECT COUNT(*) FROM exams');
+    let sortOrder = parseInt(existingCountRes.rows[0].count, 10);
+
+    const inserted = [];
+    for (const r of rows) {
+      if (!r.exam_date || !r.subject) continue;
+      const durationMin = (() => {
+        if (!r.start_time || !r.end_time) return null;
+        const [sh, sm] = r.start_time.split(':').map(Number);
+        const [eh, em] = r.end_time.split(':').map(Number);
+        if ([sh, sm, eh, em].some(Number.isNaN)) return null;
+        const diff = (eh * 60 + em) - (sh * 60 + sm);
+        return diff > 0 ? diff : null;
+      })();
+
+      const result = await db.query(
+        `INSERT INTO exams (exam_date, slot, start_time, end_time, duration_min, candidates, grade, subject, venue, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [r.exam_date, r.slot || 'Slot 1', r.start_time || '', r.end_time || '', durationMin,
+         r.candidates != null ? Number(r.candidates) : null, r.grade || '', r.subject, r.venue || '', sortOrder]
+      );
+      inserted.push(result.rows[0]);
+      sortOrder++;
+    }
+
+    return res.json({ inserted: inserted.length, rows: inserted });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
