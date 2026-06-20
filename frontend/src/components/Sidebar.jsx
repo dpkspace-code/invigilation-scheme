@@ -9,6 +9,7 @@ const NAV = [
   { to: '/pairs', label: '3. Invig. Pairs' },
   { to: '/venues', label: '4. Exam Venues' },
   { to: '/exams', label: '5. Exam Timetable' },
+  { to: '/import-timetable', label: '6. Import Timetable (AI)' },
   { label: 'Scheduling', section: true },
   { to: '/workload', label: 'Live Workload' },
   { to: '/schedule', label: 'Generate Scheme' },

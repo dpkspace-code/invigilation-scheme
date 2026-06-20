@@ -10,6 +10,7 @@ import Exams from './pages/Exams';
 import { Workload, Schedule } from './pages/SchedulePages';
 import { Users, Settings } from './pages/AdminPages';
 import Absences from './pages/Absences';
+import ImportTimetable from './pages/ImportTimetable';
 import './index.css';
 
 function App() {
@@ -28,6 +29,7 @@ function App() {
           <Route path="/workload" element={<ProtectedRoute><Workload /></ProtectedRoute>} />
           <Route path="/schedule" element={<ProtectedRoute><Schedule /></ProtectedRoute>} />
           <Route path="/absences" element={<ProtectedRoute><Absences /></ProtectedRoute>} />
+          <Route path="/import-timetable" element={<ProtectedRoute><ImportTimetable /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
