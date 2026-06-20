@@ -151,18 +151,27 @@ export function Attendants() {
 }
 
 // Pairs.jsx
-import { teachers as teachersApi, pairs as pairsApi } from '../api';
+import { teachers as teachersApi, attendants as attendantsApi, pairs as pairsApi } from '../api';
 
 export function Pairs() {
   const [list, setList] = useState([]);
   const [teacherNames, setTeacherNames] = useState([]);
+  const [attendantNames, setAttendantNames] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [undoStack, setUndoStack] = useState([]);
   const { isAdmin } = useAuth();
   const pendingDeletes = useRef(new Map());
-  const load = () => Promise.all([pairsApi.list(), teachersApi.list()]).then(([p, t]) => { setList(p.data); setTeacherNames(t.data.map(x => x.name)); }).catch(() => {});
+
+  const load = () => Promise.all([pairsApi.list(), teachersApi.list(), attendantsApi.list()])
+    .then(([p, t, a]) => {
+      setList(p.data);
+      setTeacherNames(t.data.map(x => x.name));
+      setAttendantNames(a.data.map(x => x.name));
+    }).catch(() => {});
   useEffect(() => { load(); }, []);
+
+  const allNames = [...teacherNames, ...attendantNames];
 
   const regenerate = async () => {
     if (!confirm('Regenerate pairs sequentially from the staff list? This will replace all existing pairs.')) return;
@@ -181,7 +190,19 @@ export function Pairs() {
     catch { toast.error('Failed'); }
   };
 
-  const update = async (id, field, value) => { try { await pairsApi.update(id, { [field]: value }); } catch { toast.error('Failed'); } };
+  const update = async (id, field, value) => {
+    setList(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p));
+    try { await pairsApi.update(id, { [field]: value }); } catch { toast.error('Failed'); }
+  };
+
+  const removeMember = (pairId, field) => {
+    const pair = list.find(p => p.id === pairId);
+    if (!pair) return;
+    const name = pair[field];
+    if (!name) return;
+    if (!confirm(`Remove "${name}" from this pair? You'll be able to pick a replacement right after.`)) return;
+    update(pairId, field, '');
+  };
 
   const commitDelete = (id) => {
     const entry = pendingDeletes.current.get(id);
@@ -220,7 +241,7 @@ export function Pairs() {
       const timer = setTimeout(() => {
         commitDelete(record.id);
         setUndoStack(prev => prev.filter(b => b.batchId !== batchId));
-      }, SAFETY_COMMIT_MS);
+      }, 2 * 60 * 1000);
       pendingDeletes.current.set(record.id, { record, timer, batchId });
     });
     setUndoStack(prev => [...prev, { batchId, label, records }]);
@@ -229,7 +250,7 @@ export function Pairs() {
   const remove = (id) => {
     const record = list.find(p => p.id === id);
     if (!record) return;
-    if (!confirm('Remove pair?')) return;
+    if (!confirm('Remove this whole pair?')) return;
     setList(prev => prev.filter(p => p.id !== id));
     setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
     startBatchDelete([record], `Removed pair`);
@@ -247,14 +268,15 @@ export function Pairs() {
     startBatchDelete(records, `Removed ${records.length} pair(s)`);
   };
 
-  const usedA = new Set(list.map(p => p.member_a).filter(Boolean));
-  const usedB = new Set(list.map(p => p.member_b).filter(Boolean));
+  const opts = (selectedVal) => ['', ...allNames].map(n =>
+    `<option value="${n}" ${n===selectedVal?'selected':''}>${n || '-- select replacement --'}</option>`
+  ).join('');
 
   return (
     <div>
       <h1>Invigilator Pairs</h1>
       <p className="subtitle">{list.filter(p=>p.member_a&&p.member_b&&p.member_a!==p.member_b).length} usable pair(s)</p>
-      <p className="help">Fixed pairs for the whole exam period. Each pair is assigned to rooms as a unit. Use the dropdowns to change who's paired with whom.</p>
+      <p className="help">Fixed pairs for the whole exam period. Each pair is assigned to rooms as a unit. Remove a whole pair with the row's Remove button, or remove just one member (✕) to open a slot for a replacement — any teacher or attendant can be picked, not only unpaired ones.</p>
 
       {undoStack.length > 0 && (
         <div className="card" style={{ background: 'var(--warn-light, #fff8e1)', marginBottom: 12 }}>
@@ -289,29 +311,44 @@ export function Pairs() {
           <thead>
             <tr>
               {isAdmin && <th style={{width:30}}><input type="checkbox" checked={selected.size === list.length && list.length > 0} onChange={toggleSelectAll} /></th>}
-              <th>#</th><th>Member 1</th><th>Member 2</th>{isAdmin && <th style={{width:70}}></th>}
+              <th>#</th><th>Member 1</th><th>Member 2</th>{isAdmin && <th style={{width:90}}>Whole pair</th>}
             </tr>
           </thead>
-          <tbody>{list.map((p, i) => {
-            const opts = (selected) => ['', ...teacherNames].map(n =>
-              `<option value="${n}" ${n===selected?'selected':''}>${n || '-- select --'}</option>`
-            ).join('');
-            return (
-              <tr key={p.id} style={p.member_a && p.member_a === p.member_b ? {background:'var(--warn-light)'} : {}}>
-                {isAdmin && <td><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} /></td>}
-                <td>{i+1}</td>
-                <td>
-                  <select defaultValue={p.member_a} onChange={e => update(p.id,'member_a',e.target.value)} disabled={!isAdmin}
-                    dangerouslySetInnerHTML={{__html: opts(p.member_a)}} />
-                </td>
-                <td>
-                  <select defaultValue={p.member_b} onChange={e => update(p.id,'member_b',e.target.value)} disabled={!isAdmin}
-                    dangerouslySetInnerHTML={{__html: opts(p.member_b)}} />
-                </td>
-                {isAdmin && <td><button className="btn btn-sm btn-danger" onClick={() => remove(p.id)}>Remove</button></td>}
-              </tr>
-            );
-          })}</tbody>
+          <tbody>{list.map((p, i) => (
+            <tr key={p.id} style={p.member_a && p.member_a === p.member_b ? {background:'var(--warn-light)'} : {}}>
+              {isAdmin && <td><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} /></td>}
+              <td>{i+1}</td>
+              <td>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <select
+                    defaultValue={p.member_a}
+                    onChange={e => update(p.id,'member_a',e.target.value)}
+                    disabled={!isAdmin}
+                    style={p.member_a ? {} : { borderColor: 'var(--danger, #c62828)' }}
+                    dangerouslySetInnerHTML={{__html: opts(p.member_a)}}
+                  />
+                  {isAdmin && p.member_a && (
+                    <button className="btn btn-sm btn-danger" title="Remove this member, open slot for replacement" onClick={() => removeMember(p.id, 'member_a')}>✕</button>
+                  )}
+                </div>
+              </td>
+              <td>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <select
+                    defaultValue={p.member_b}
+                    onChange={e => update(p.id,'member_b',e.target.value)}
+                    disabled={!isAdmin}
+                    style={p.member_b ? {} : { borderColor: 'var(--danger, #c62828)' }}
+                    dangerouslySetInnerHTML={{__html: opts(p.member_b)}}
+                  />
+                  {isAdmin && p.member_b && (
+                    <button className="btn btn-sm btn-danger" title="Remove this member, open slot for replacement" onClick={() => removeMember(p.id, 'member_b')}>✕</button>
+                  )}
+                </div>
+              </td>
+              {isAdmin && <td><button className="btn btn-sm btn-danger" onClick={() => remove(p.id)}>Remove</button></td>}
+            </tr>
+          ))}</tbody>
         </table>
       </div>
     </div>
