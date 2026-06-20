@@ -18,6 +18,7 @@ export default function ImportTimetable() {
   const [extracting, setExtracting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [rows, setRows] = useState([]);
+  const [pairs, setPairs] = useState([]);
   const [error, setError] = useState('');
   const fileInputRef = useRef(null);
 
@@ -38,6 +39,7 @@ export default function ImportTimetable() {
   const clearAll = () => {
     setFiles([]);
     setRows([]);
+    setPairs([]);
     setError('');
   };
 
@@ -50,6 +52,7 @@ export default function ImportTimetable() {
       const imagesAndPdfs = files.filter(f => !isSpreadsheet(f));
 
       let allRows = [];
+      let allPairs = [];
 
       if (imagesAndPdfs.length) {
         const formData = new FormData();
@@ -67,6 +70,9 @@ export default function ImportTimetable() {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
         allRows = allRows.concat(r.data.rows);
+        if (Array.isArray(r.data.pairs)) {
+          allPairs = allPairs.concat(r.data.pairs);
+        }
       }
 
       const withMeta = allRows.map((r, i) => ({
@@ -76,11 +82,22 @@ export default function ImportTimetable() {
         _key: `row-${Date.now()}-${i}`,
       }));
 
+      const pairsWithMeta = allPairs.map((p, i) => ({
+        ...p,
+        included: true,
+        _key: `pair-${Date.now()}-${i}`,
+      }));
+
       setRows(withMeta);
-      if (withMeta.length === 0) {
-        toast.error('No exam rows were found in the uploaded file(s)');
+      setPairs(pairsWithMeta);
+
+      if (withMeta.length === 0 && pairsWithMeta.length === 0) {
+        toast.error('Nothing was found in the uploaded file(s)');
       } else {
-        toast.success(`Extracted ${withMeta.length} row(s) — review and edit below before saving`);
+        const parts = [];
+        if (withMeta.length) parts.push(`${withMeta.length} exam row(s)`);
+        if (pairsWithMeta.length) parts.push(`${pairsWithMeta.length} invigilator pair(s)`);
+        toast.success(`Extracted ${parts.join(' and ')} — review below before saving`);
       }
     } catch (e) {
       setError(e.response?.data?.error || 'Extraction failed');
@@ -109,18 +126,44 @@ export default function ImportTimetable() {
     }]);
   };
 
+  const updatePair = (key, field, value) => {
+    setPairs(prev => prev.map(p => p._key === key ? { ...p, [field]: value } : p));
+  };
+
+  const togglePairIncluded = (key) => {
+    setPairs(prev => prev.map(p => p._key === key ? { ...p, included: !p.included } : p));
+  };
+
+  const removePair = (key) => {
+    setPairs(prev => prev.filter(p => p._key !== key));
+  };
+
   const confirmSave = async () => {
-    const toSave = rows.filter(r => r.included && r.exam_date && r.subject);
-    if (!toSave.length) {
-      toast.error('No valid rows selected to save (each row needs at least a Date and Subject)');
+    const toSaveRows = rows.filter(r => r.included && r.exam_date && r.subject);
+    const toSavePairs = pairs.filter(p => p.included && p.member_a);
+
+    if (!toSaveRows.length && !toSavePairs.length) {
+      toast.error('Nothing selected to save (rows need at least a Date and Subject; pairs need at least one member)');
       return;
     }
     setSaving(true);
     try {
-      const payload = toSave.map(({ _key, included, ...rest }) => rest);
-      const r = await api.post('/api/exams/import/confirm', { rows: payload });
-      toast.success(`Saved ${r.data.inserted} exam row(s) to the timetable`);
+      const rowsPayload = toSaveRows.map(({ _key, included, ...rest }) => rest);
+      const pairsPayload = toSavePairs.map(({ _key, included, ...rest }) => rest);
+      const r = await api.post('/api/exams/import/confirm', { rows: rowsPayload, pairs: pairsPayload });
+
+      const messages = [];
+      if (r.data.inserted) messages.push(`${r.data.inserted} exam row(s) saved`);
+      if (r.data.pairsInserted) messages.push(`${r.data.pairsInserted} pair(s) created`);
+      if (r.data.pairsSkipped?.length) messages.push(`${r.data.pairsSkipped.length} pair(s) skipped (member already in another pair)`);
+      toast.success(messages.join(' · ') || 'Saved');
+
+      if (r.data.pairsSkipped?.length) {
+        console.warn('Skipped pairs:', r.data.pairsSkipped);
+      }
+
       setRows([]);
+      setPairs([]);
       setFiles([]);
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed to save');
@@ -138,8 +181,8 @@ export default function ImportTimetable() {
       <h1>Import Exam Timetable</h1>
       <p className="subtitle">Upload a photo, PDF, or spreadsheet of the secretary's exam timetable and have it read automatically.</p>
       <p className="help">
-        Photos and PDFs are read with AI — works even with messy scans or handwriting, but always double-check the results below before saving.
-        Excel/CSV files are read directly and don't use AI, so they're faster and more exact if the file is already in a clean table format.
+        Photos and PDFs are read with AI — works even with messy scans or handwriting. Excel/CSV files are also read with AI now, so any layout (including multi-slot pivoted timetables with one sheet per date) can be understood, not just simple flat tables.
+        If the file shows which staff were paired together to invigilate, those pairs are extracted too — review them separately below before deciding whether to save them as new Pairs.
       </p>
 
       <div
@@ -185,7 +228,7 @@ export default function ImportTimetable() {
 
       {rows.length > 0 && (
         <div style={{ marginTop: 20 }}>
-          <h2>Review extracted rows ({rows.filter(r => r.included).length} of {rows.length} selected)</h2>
+          <h2>Review extracted exam rows ({rows.filter(r => r.included).length} of {rows.length} selected)</h2>
           <p className="help">Uncheck any row you don't want to import, edit any field directly, or remove a row entirely. Nothing is saved until you click "Confirm & Save" below.</p>
           <div className="table-wrap">
             <table>
@@ -221,10 +264,52 @@ export default function ImportTimetable() {
           </div>
           <div className="btn-row" style={{ marginTop: 12 }}>
             <button className="btn" onClick={addBlankRow}>Add blank row</button>
-            <button className="btn btn-primary" onClick={confirmSave} disabled={saving}>
-              {saving ? 'Saving…' : 'Confirm & Save to Timetable'}
-            </button>
           </div>
+        </div>
+      )}
+
+      {pairs.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <h2>Review extracted invigilator pairs ({pairs.filter(p => p.included).length} of {pairs.length} selected)</h2>
+          <p className="help">
+            These pairs were identified from the uploaded file. Uncheck any you don't want to create as new Pairs.
+            Any pair where a member already belongs to an existing Pair will be automatically skipped when you save, to avoid double-booking — you'll see a summary of any skipped pairs after saving.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 30 }}></th>
+                  <th>Member A</th><th>Member B</th><th>Type</th>
+                  <th style={{ width: 70 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pairs.map(p => (
+                  <tr key={p._key} style={{ opacity: p.included ? 1 : 0.4 }}>
+                    <td><input type="checkbox" checked={p.included} onChange={() => togglePairIncluded(p._key)} /></td>
+                    <td><input value={p.member_a || ''} onChange={e => updatePair(p._key, 'member_a', e.target.value)} /></td>
+                    <td><input value={p.member_b || ''} onChange={e => updatePair(p._key, 'member_b', e.target.value)} /></td>
+                    <td>
+                      <select value={p.type || 'teacher'} onChange={e => updatePair(p._key, 'type', e.target.value)}>
+                        <option value="teacher">teacher</option>
+                        <option value="attendant">attendant</option>
+                      </select>
+                    </td>
+                    <td><button className="btn btn-sm btn-danger" onClick={() => removePair(p._key)}>Remove</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {(rows.length > 0 || pairs.length > 0) && (
+        <div className="btn-row" style={{ marginTop: 20 }}>
+          <button className="btn btn-primary" onClick={confirmSave} disabled={saving}>
+            {saving ? 'Saving…' : 'Confirm & Save to Timetable'}
+          </button>
         </div>
       )}
     </div>
