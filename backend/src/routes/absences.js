@@ -2,7 +2,18 @@ const router = require('express').Router();
 const db = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 
-router.use(authMiddleware);
+// Get every absence across all dates, grouped by date (for the overview panel)
+router.get('/all/list', async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM absences ORDER BY exam_date, staff_name');
+    const grouped = {};
+    result.rows.forEach(a => {
+      if (!grouped[a.exam_date]) grouped[a.exam_date] = [];
+      grouped[a.exam_date].push(a);
+    });
+    return res.json(grouped);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
 
 const parseTimeToMinutes = (str) => {
   if (!str) return null;

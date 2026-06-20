@@ -11,6 +11,10 @@ export default function Absences() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
 
+  const [allAbsences, setAllAbsences] = useState({});
+  const [showAllPanel, setShowAllPanel] = useState(false);
+  const [allLoading, setAllLoading] = useState(false);
+
   useEffect(() => {
     api.get('/api/teachers').then(r => setTeachers(r.data));
     api.get('/api/attendants').then(r => setAttendants(r.data));
@@ -21,6 +25,21 @@ export default function Absences() {
     api.get(`/api/absences/${date}`).then(r => setAbsences(r.data));
     api.get(`/api/absences/${date}/replacements`).then(r => setReplacements(r.data));
   }, [date]);
+
+  const loadAllAbsences = async () => {
+    setAllLoading(true);
+    try {
+      const r = await api.get('/api/absences/all/list');
+      setAllAbsences(r.data);
+    } catch (e) { setMsg(e.response?.data?.error || 'Error loading all absences'); }
+    setAllLoading(false);
+  };
+
+  const toggleAllPanel = () => {
+    const next = !showAllPanel;
+    setShowAllPanel(next);
+    if (next) loadAllAbsences();
+  };
 
   const toggleAbsence = (name, type) => {
     setAbsences(prev => {
@@ -36,6 +55,7 @@ export default function Absences() {
     try {
       await api.post(`/api/absences/${date}`, { absences });
       setMsg('Absences saved!');
+      if (showAllPanel) loadAllAbsences();
     } catch (e) { setMsg(e.response?.data?.error || 'Error saving'); }
     setLoading(false);
   };
@@ -75,9 +95,50 @@ export default function Absences() {
 
   const isAbsent = (name) => absences.some(a => a.staff_name === name);
 
+  const sortedAllDates = Object.keys(allAbsences).sort();
+
   return (
     <div style={{ padding: '1.5rem', maxWidth: 900, margin: '0 auto' }}>
       <h2 style={{ marginBottom: '1rem' }}>Absences & Replacements</h2>
+
+      <div style={{ marginBottom: '1rem', border: '1px solid #ddd', borderRadius: 4 }}>
+        <button onClick={toggleAllPanel}
+          style={{ width: '100%', textAlign: 'left', padding: '0.6rem 0.8rem', background: '#f5f5f5',
+            border: 'none', borderRadius: showAllPanel ? '4px 4px 0 0' : 4, cursor: 'pointer', fontWeight: 600 }}>
+          {showAllPanel ? '▾' : '▸'} All Absences — every exam day
+        </button>
+        {showAllPanel && (
+          <div style={{ padding: '0.8rem' }}>
+            {allLoading ? (
+              <div>Loading…</div>
+            ) : sortedAllDates.length === 0 ? (
+              <div style={{ color: '#888' }}>No absences recorded on any date yet.</div>
+            ) : (
+              sortedAllDates.map(d => (
+                <div key={d} style={{ marginBottom: '0.8rem' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '0.3rem' }}>
+                    {d} <span style={{ fontWeight: 400, color: '#888' }}>({allAbsences[d].length} absent)</span>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    {allAbsences[d].map(a => (
+                      <span key={a.id} style={{ padding: '0.2rem 0.5rem', borderRadius: 4, fontSize: '0.85rem',
+                        background: a.staff_type === 'teacher' ? '#e3f2fd' : '#f3e5f5',
+                        border: '1px solid', borderColor: a.staff_type === 'teacher' ? '#1976d2' : '#7b1fa2' }}>
+                        {a.staff_name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+            <button onClick={loadAllAbsences} disabled={allLoading}
+              style={{ marginTop: '0.4rem', padding: '0.3rem 0.7rem', borderRadius: 4, cursor: 'pointer',
+                background: 'none', border: '1px solid #ccc' }}>
+              Refresh
+            </button>
+          </div>
+        )}
+      </div>
 
       <div style={{ marginBottom: '1rem' }}>
         <label><strong>Exam Date: </strong></label>

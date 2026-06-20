@@ -87,13 +87,12 @@ export const schedule = {
 };
 
 export const absences = {
+  listAll: () => api.get('/api/absences/all/list'),
   list: (date) => api.get('/api/absences', { params: { date } }),
   mark: (exam_date, staff_name, staff_type) => api.post('/api/absences', { exam_date, staff_name, staff_type }),
   remove: (id) => api.delete(`/api/absences/${id}`),
-
   suggestions: (date, slot, staff_name, staff_type) =>
     api.get('/api/absences/suggestions', { params: { date, slot, staff_name, staff_type } }),
-
   listReplacements: (date) => api.get('/api/absences/replacements', { params: { date } }),
   confirmReplacement: (data) => api.post('/api/absences/replacements', data),
   removeReplacement: (id) => api.delete(`/api/absences/replacements/${id}`),
