@@ -1,6 +1,7 @@
 // Workload.jsx — live auto-refreshing invigilator workload
 import { useState, useEffect } from 'react';
-import { schedule as scheduleApi } from '../api';
+import api, { schedule as scheduleApi, teachers as teachersApi, attendants as attendantsApi } from '../api';
+import toast from 'react-hot-toast';
 
 export function Workload() {
   const [data, setData] = useState(null);
@@ -92,7 +93,7 @@ export function Workload() {
 }
 
 // Schedule.jsx — full generated scheme with export, per-row hide + persistent undo,
-// now persisted to sessionStorage so navigating away and back keeps the result.
+// persisted to sessionStorage, plus inline per-invigilator removal/replacement.
 export function Schedule() {
   const STORAGE_KEY = 'invig_schedule_result_v1';
   const HIDDEN_KEY = 'invig_schedule_hidden_v1';
@@ -115,7 +116,12 @@ export function Schedule() {
   const [hidden, setHidden] = useState(loadStoredHidden);
   const [undoStack, setUndoStack] = useState([]);
 
+  const [pickerKey, setPickerKey] = useState(null);
+  const [pickerCandidates, setPickerCandidates] = useState([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+
   const rowKey = (row) => `${row.exam.exam_date}|${row.exam.slot}|${row.exam.venue}`;
+  const personKey = (row, name) => `${row.exam.exam_date}|${row.exam.slot}|${row.exam.venue}|${name}`;
 
   const persistResult = (r) => {
     try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(r)); } catch {}
@@ -133,6 +139,7 @@ export function Schedule() {
       setHidden(new Map());
       persistHidden(new Map());
       setUndoStack([]);
+      setPickerKey(null);
     } catch (err) {
       alert(err.response?.data?.error || 'Generation failed');
     } finally { setLoading(false); }
@@ -174,6 +181,52 @@ export function Schedule() {
     setUndoStack([]);
   };
 
+  const openPicker = async (row, name) => {
+    const key = personKey(row, name);
+    if (pickerKey === key) { setPickerKey(null); return; }
+    setPickerKey(key);
+    setPickerLoading(true);
+    setPickerCandidates([]);
+    try {
+      const r = await api.get(`/api/absences/${row.exam.exam_date}/replacements/suggest`);
+      const match = r.data.suggestions.find(s =>
+        s.absent_name === name && s.slot === row.exam.slot && s.venue === row.exam.venue
+      );
+      if (match) {
+        setPickerCandidates(match.candidates);
+      } else {
+        const [t, a] = await Promise.all([teachersApi.list(), attendantsApi.list()]);
+        const names = [
+          ...t.data.map(x => ({ name: x.name, type: 'teacher' })),
+          ...a.data.map(x => ({ name: x.name, type: 'attendant' })),
+        ].filter(c => c.name !== name);
+        setPickerCandidates(names);
+      }
+    } catch (e) {
+      toast.error('Could not load replacement candidates');
+      setPickerKey(null);
+    } finally {
+      setPickerLoading(false);
+    }
+  };
+
+  const confirmInlineReplacement = async (row, absentName, candidate) => {
+    try {
+      await api.post(`/api/absences/${row.exam.exam_date}/replacements`, {
+        slot: row.exam.slot,
+        venue: row.exam.venue,
+        absent_name: absentName,
+        replacement_name: candidate.name,
+        replacement_type: candidate.type,
+      });
+      toast.success(`${absentName} replaced with ${candidate.name} for this slot`);
+      setPickerKey(null);
+      await generate();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to confirm replacement');
+    }
+  };
+
   const exportCSV = () => {
     if (!result) return;
     const rows = [['Date','Slot','Start','End','Duration(min)','Candidates','Grade','Subject','Venue','Invigilator 1','Invigilator 2','Type']];
@@ -204,7 +257,7 @@ export function Schedule() {
   return (
     <div>
       <h1>Generate Invigilation Scheme</h1>
-      <p className="help">This generates the full day-by-day schedule, assigning pairs to venues, balancing total invigilation time, and flagging any unfilled slots. The result stays here while you navigate elsewhere in the app — click Regenerate for a fresh run, or it clears when you close this browser tab. You can remove individual slots from this view/export — removing a slot does not delete it from the Exam Timetable, so it will reappear next time you regenerate.</p>
+      <p className="help">This generates the full day-by-day schedule, assigning pairs to venues, balancing total invigilation time, and flagging any unfilled slots. The result stays here while you navigate elsewhere — click Regenerate for a fresh run, or it clears when you close this browser tab. Use the per-row Remove to hide a slot from this view/export only (it reappears on regenerate). Use the small ✕ next to an invigilator's name to permanently swap them out and pick a replacement — this is saved and will apply on every future regeneration too.</p>
 
       <div className="btn-row">
         <button className="btn btn-primary" onClick={generate} disabled={loading}>
@@ -272,11 +325,52 @@ export function Schedule() {
                         <td>{row.exam.venue}</td>
                         <td>
                           {row.pairsList.map((a, j) => (
-                            <div key={j}>
+                            <div key={j} style={{marginBottom: a.members.length ? 4 : 0}}>
                               {row.pairsList.length > 1 && <span style={{fontFamily:'var(--mono)',fontSize:10}}>{j+1}. </span>}
-                              {a.type === 'unfilled'
-                                ? <span className="unfilled">Unassigned</span>
-                                : <span>{a.members.join(' & ')}{a.type==='attendant' && <span className="badge badge-viewer" style={{marginLeft:4}}>attendant</span>}</span>}
+                              {a.type === 'unfilled' ? (
+                                <span className="unfilled">Unassigned</span>
+                              ) : (
+                                a.members.filter(Boolean).map(name => {
+                                  const pKey = personKey(row, name);
+                                  return (
+                                    <span key={name} style={{display:'inline-flex',alignItems:'center',gap:4,marginRight:8,position:'relative'}}>
+                                      <span>{name}{a.type==='attendant' && <span className="badge badge-viewer" style={{marginLeft:4}}>attendant</span>}</span>
+                                      <button
+                                        className="btn btn-sm btn-danger"
+                                        style={{padding:'1px 6px',fontSize:10}}
+                                        title="Remove and replace this invigilator for this slot"
+                                        onClick={() => openPicker(row, name)}
+                                      >✕</button>
+                                      {pickerKey === pKey && (
+                                        <span className="card" style={{display:'block',marginTop:4,padding:8,position:'absolute',top:'100%',left:0,zIndex:5,background:'var(--paper)',minWidth:220}}>
+                                          {pickerLoading ? (
+                                            <span className="help">Loading candidates…</span>
+                                          ) : pickerCandidates.length === 0 ? (
+                                            <span className="help">No available candidates found.</span>
+                                          ) : (
+                                            <span style={{display:'flex',flexWrap:'wrap',gap:6,maxWidth:300}}>
+                                              {pickerCandidates.map((c, ci) => (
+                                                <button
+                                                  key={ci}
+                                                  className="btn btn-sm"
+                                                  style={{
+                                                    background: c.type === 'teacher' ? '#e3f2fd' : '#f3e5f5',
+                                                    border: '1px solid',
+                                                    borderColor: c.type === 'teacher' ? '#1976d2' : '#7b1fa2',
+                                                  }}
+                                                  onClick={() => confirmInlineReplacement(row, name, c)}
+                                                >
+                                                  {c.name} ({c.type})
+                                                </button>
+                                              ))}
+                                            </span>
+                                          )}
+                                        </span>
+                                      )}
+                                    </span>
+                                  );
+                                })
+                              )}
                             </div>
                           ))}
                         </td>
