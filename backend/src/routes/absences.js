@@ -2,18 +2,7 @@ const router = require('express').Router();
 const db = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 
-// Get every absence across all dates, grouped by date (for the overview panel)
-router.get('/all/list', async (req, res) => {
-  try {
-    const result = await db.query('SELECT * FROM absences ORDER BY exam_date, staff_name');
-    const grouped = {};
-    result.rows.forEach(a => {
-      if (!grouped[a.exam_date]) grouped[a.exam_date] = [];
-      grouped[a.exam_date].push(a);
-    });
-    return res.json(grouped);
-  } catch (e) { return res.status(500).json({ error: e.message }); }
-});
+router.use(authMiddleware);
 
 const parseTimeToMinutes = (str) => {
   if (!str) return null;
@@ -27,6 +16,19 @@ const computeDuration = (ex) => {
   if (s == null || e == null || e <= s) return 0;
   return e - s;
 };
+
+// Get every absence across all dates, grouped by date (for the overview panel)
+router.get('/all/list', async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM absences ORDER BY exam_date, staff_name');
+    const grouped = {};
+    result.rows.forEach(a => {
+      if (!grouped[a.exam_date]) grouped[a.exam_date] = [];
+      grouped[a.exam_date].push(a);
+    });
+    return res.json(grouped);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
 
 // ---- Absences ----
 
@@ -67,6 +69,8 @@ router.get('/:date/replacements', async (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
+// Confirm a replacement — upserts so re-picking a candidate for the same
+// absent person/slot/venue replaces the previous choice instead of stacking rows
 router.post('/:date/replacements', async (req, res) => {
   try {
     const { date } = req.params;
@@ -77,6 +81,8 @@ router.post('/:date/replacements', async (req, res) => {
     const result = await db.query(
       `INSERT INTO replacements (exam_date, slot, venue, absent_name, replacement_name, replacement_type)
        VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (exam_date, slot, venue, absent_name)
+       DO UPDATE SET replacement_name = EXCLUDED.replacement_name, replacement_type = EXCLUDED.replacement_type
        RETURNING *`,
       [date, slot, venue || '', absent_name, replacement_name, replacement_type || null]
     );
