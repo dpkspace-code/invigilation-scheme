@@ -10,6 +10,8 @@ import Exams from './pages/Exams';
 import { Workload, Schedule } from './pages/SchedulePages';
 import { Users, Settings } from './pages/AdminPages';
 import Absences from './pages/Absences';
+import Subjects from './pages/Subjects';
+import Papers from './pages/Papers';
 import ImportTimetable from './pages/ImportTimetable';
 import './index.css';
 
@@ -29,6 +31,8 @@ function App() {
           <Route path="/workload" element={<ProtectedRoute><Workload /></ProtectedRoute>} />
           <Route path="/schedule" element={<ProtectedRoute><Schedule /></ProtectedRoute>} />
           <Route path="/absences" element={<ProtectedRoute><Absences /></ProtectedRoute>} />
+          <Route path="/subjects" element={<ProtectedRoute><Subjects /></ProtectedRoute>} />
+          <Route path="/papers" element={<ProtectedRoute><Papers /></ProtectedRoute>} />
           <Route path="/import-timetable" element={<ProtectedRoute><ImportTimetable /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />

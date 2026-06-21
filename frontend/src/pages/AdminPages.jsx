@@ -25,7 +25,7 @@ export function Users() {
     <div>
       <h1>Manage Users</h1>
       <p className="subtitle">{users.length} user(s)</p>
-      <p className="help">Admin users can view and edit everything. Viewer users can only read data and view the schedule — they can't add, edit, or delete anything.</p>
+      <p className="help">Admin users can view and edit everything. HOD users can manage papers for the subjects they're assigned to. Viewer users can only read data and view the schedule — they can't add, edit, or delete anything.</p>
       <div className="note">To add a new user, share the app link and ask them to click "Create account" on the login screen.</div>
       <div className="table-wrap">
         <table>
@@ -40,6 +40,7 @@ export function Users() {
                   : (
                     <select value={u.role} onChange={e => updateRole(u.id, e.target.value)} style={{fontSize:12,padding:'3px 6px'}}>
                       <option value="admin">Admin</option>
+                      <option value="hod">HOD</option>
                       <option value="viewer">Viewer</option>
                     </select>
                   )}

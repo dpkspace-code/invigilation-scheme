@@ -10,6 +10,8 @@ const NAV = [
   { to: '/venues', label: '4. Exam Venues' },
   { to: '/exams', label: '5. Exam Timetable' },
   { to: '/import-timetable', label: '6. Import Timetable (AI)' },
+  { to: '/subjects', label: '7. Subjects' },
+  { to: '/papers', label: '8. My Papers' },
   { label: 'Scheduling', section: true },
   { to: '/workload', label: 'Live Workload' },
   { to: '/schedule', label: 'Generate Scheme' },
