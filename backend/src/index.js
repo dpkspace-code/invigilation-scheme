@@ -19,6 +19,8 @@ app.use('/api/pairs', require('./routes/crud')('pairs'));
 app.use('/api/venues', require('./routes/crud')('venues'));
 app.use('/api/exams', require('./routes/examImport'));
 app.use('/api/exams', require('./routes/crud')('exams'));
+app.use('/api/subjects', require('./routes/subjects'));
+app.use('/api/papers', require('./routes/papers'));
 app.use('/api/schedule', require('./routes/schedule'));
 app.use('/api/absences', require('./routes/absences'));
 
