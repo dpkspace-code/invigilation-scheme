@@ -199,6 +199,54 @@ router.post('/import-spreadsheet', upload.single('file'), async (req, res) => {
   }
 });
 
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i - 1] === b[j - 1]) dp[i][j] = dp[i - 1][j - 1];
+      else dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+function normalizeName(s) {
+  let n = String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  n = n.replace(/^(MR|MRS|MISS|MS|DR)\.?\s+/i, '');
+  n = n.replace(/\.$/, '');
+  return n.trim();
+}
+
+function findFuzzyMatch(extractedName, knownNames) {
+  const target = normalizeName(extractedName);
+  if (!target) return null;
+
+  for (const known of knownNames) {
+    if (normalizeName(known) === target) return known;
+  }
+  for (const known of knownNames) {
+    const k = normalizeName(known);
+    if (k.startsWith(target.replace(/\.$/, '')) || target.startsWith(k)) return known;
+    const targetParts = target.split(' ');
+    const knownParts = k.split(' ');
+    if (targetParts[0] === knownParts[0] && targetParts[1] && knownParts[1] && targetParts[1][0] === knownParts[1][0]) {
+      return known;
+    }
+  }
+  let best = null, bestDist = Infinity;
+  for (const known of knownNames) {
+    const k = normalizeName(known);
+    const dist = levenshtein(target, k);
+    if (dist < bestDist) { bestDist = dist; best = known; }
+  }
+  if (best && bestDist <= 2) return best;
+
+  return null;
+}
+
 router.post('/import/confirm', async (req, res) => {
   try {
     const { rows, pairs } = req.body;
@@ -237,7 +285,13 @@ router.post('/import/confirm', async (req, res) => {
     const insertedPairs = [];
     const skippedPairs = [];
     if (Array.isArray(pairs) && pairs.length > 0) {
-      const existingPairsRes = await db.query('SELECT member_a, member_b FROM pairs');
+      const [teachersRes, attendantsRes, existingPairsRes] = await Promise.all([
+        db.query('SELECT name FROM teachers'),
+        db.query('SELECT name FROM attendants'),
+        db.query('SELECT member_a, member_b FROM pairs'),
+      ]);
+      const allKnownNames = [...teachersRes.rows.map(r => r.name), ...attendantsRes.rows.map(r => r.name)];
+
       const usedNames = new Set();
       existingPairsRes.rows.forEach(p => {
         if (p.member_a) usedNames.add(p.member_a.trim().toLowerCase());
@@ -248,9 +302,23 @@ router.post('/import/confirm', async (req, res) => {
       let pairSortOrder = parseInt(existingPairCountRes.rows[0].count, 10);
 
       for (const p of pairs) {
-        const a = (p.member_a || '').trim();
-        const b = (p.member_b || '').trim();
-        if (!a) continue;
+        const aRaw = (p.member_a || '').trim();
+        const bRaw = (p.member_b || '').trim();
+        if (!aRaw) continue;
+
+        const aMatch = findFuzzyMatch(aRaw, allKnownNames);
+        const bMatch = bRaw ? findFuzzyMatch(bRaw, allKnownNames) : null;
+
+        if (!aMatch || (bRaw && !bMatch)) {
+          skippedPairs.push({
+            member_a: aRaw, member_b: bRaw,
+            reason: !aMatch ? `"${aRaw}" doesn't match any existing Teacher or Attendant` : `"${bRaw}" doesn't match any existing Teacher or Attendant`,
+          });
+          continue;
+        }
+
+        const a = aMatch;
+        const b = bMatch || null;
 
         const aUsed = usedNames.has(a.toLowerCase());
         const bUsed = b && usedNames.has(b.toLowerCase());
@@ -260,8 +328,8 @@ router.post('/import/confirm', async (req, res) => {
         }
 
         const result = await db.query(
-          `INSERT INTO pairs (member_a, member_b, type, sort_order) VALUES ($1, $2, $3, $4) RETURNING *`,
-          [a, b || null, p.type === 'attendant' ? 'attendant' : 'teacher', pairSortOrder]
+          `INSERT INTO pairs (member_a, member_b, sort_order) VALUES ($1, $2, $3) RETURNING *`,
+          [a, b, pairSortOrder]
         );
         insertedPairs.push(result.rows[0]);
         usedNames.add(a.toLowerCase());
